@@ -1,0 +1,15 @@
+﻿<Page x:Class="TestWpfSample.Pages.PageEaseInEaseOut"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+      xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+      xmlns:local="clr-namespace:TestWpfSample.Pages"
+      mc:Ignorable="d" Name="EaseInEaseOut"
+      d:DesignHeight="300" d:DesignWidth="300"
+      Title="PageEaseInEaseOut">
+
+    <Grid>
+        <TextBlock Name="textBlockTransitionType" Height="30" VerticalAlignment="Top"/>
+        <Button x:Name="buttonEaseInEaseOut" Content="EaseInEaseOut" HorizontalAlignment="Left" Margin="0,153,0,0" VerticalAlignment="Top" Width="122" Height="38" Click="buttonEaseInEaseOut_Click"/>
+    </Grid>
+</Page>

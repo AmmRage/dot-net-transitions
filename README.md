@@ -17,7 +17,7 @@ The Transitions library is built with Visual Studio 2008 but targets version 2 o
 - [Download sample 1.2](https://github.com/UweKeim/dot-net-transitions/blob/master/Downloads/TransitionsSample_1_2.zip?raw=true)
 - [Download code 1.2](https://github.com/UweKeim/dot-net-transitions/blob/master/Downloads/TransitionsCode_1_2.zip?raw=true)
 
-## Getting started
+## Getting started with Winforms
 
 You can animate a single property of an object with a single line of code like this:
 
@@ -37,6 +37,15 @@ t.run();
 ```
 
 This animates the movement of pictureBox1 from its initial location to (300, 200) over the course of 2000ms.
+
+
+## Getting started with WPF (by ammrage)
+
+The implentment of transition on WPF is in some similar way as it is on WinForms based on reflection. As WPF has built-in animation implentment which got much better performance, more powerful and fancier visual effect, the main purpose of the WPF extension is just to make it easier to apply simple animations on WPF and Winforms the same way.  
+
+```csharp
+Transition.run(sender, "Margin.Left", 200, new TransitionType_Linear(1000));
+```
 
 ## Coding with Transitions
 

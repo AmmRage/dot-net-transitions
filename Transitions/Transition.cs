@@ -6,6 +6,8 @@ using System.Timers;
 using System.Diagnostics;
 using System.Windows.Forms;
 using System.ComponentModel;
+using System.Windows;
+using System.Windows.Threading;
 
 namespace Transitions
 {
@@ -119,9 +121,12 @@ namespace Transitions
 		/// </summary>
 		public void add(object target, string strPropertyName, object destinationValue)
 		{
-			// We get the property info...
 			Type targetType = target.GetType();
-			PropertyInfo propertyInfo = targetType.GetProperty(strPropertyName);
+            PropertyInfo propertyInfo = null;
+            IManagedType managedType = null;
+
+		    // We get the property info...
+			propertyInfo = targetType.GetPropertyEx(strPropertyName);
 			if (propertyInfo == null)
 			{
 				throw new Exception("Object: " + target.ToString() + " does not have the property: " + strPropertyName);
@@ -139,8 +144,7 @@ namespace Transitions
             {
                 throw new Exception("Property is not both getable and setable: " + strPropertyName);
             }
-
-            IManagedType managedType = m_mapManagedTypes[propertyType];
+            managedType = m_mapManagedTypes[propertyType];
             
             // We can manage this type, so we store the information for the
 			// transition of this property...
@@ -149,6 +153,8 @@ namespace Transitions
 			info.target = target;
 			info.propertyInfo = propertyInfo;
 			info.managedType = managedType;
+		    info.propertyPath = strPropertyName;
+		    info.IsComplex = strPropertyName.Contains(".");
 
             lock (m_Lock)
             {
@@ -165,8 +171,19 @@ namespace Transitions
             // are animating...
             foreach (TransitionedPropertyInfo info in m_listTransitionedProperties)
             {
-                object value = info.propertyInfo.GetValue(info.target, null);
-                info.startValue = info.managedType.copy(value);
+                if (info.IsComplex)
+                {
+                    (info.target as UIElement).Dispatcher.Invoke(DispatcherPriority.Input, new Action(() =>
+                    {
+                        var value = ComplexProperty.GetComplexValue(info.target, info.propertyPath);
+                        info.startValue = info.managedType.copy(value);
+                    }));
+                }
+                else
+                {
+                    object value = info.propertyInfo.GetValue(info.target, null);
+                    info.startValue = info.managedType.copy(value);
+                }
             }
 
 			// We start the stopwatch. We use this when the timer ticks to measure 
@@ -238,10 +255,10 @@ namespace Transitions
                 object value = info.managedType.getIntermediateValue(info.startValue, info.endValue, dPercentage);
 
                 // We set it...
-                PropertyUpdateArgs args = new PropertyUpdateArgs(info.target, info.propertyInfo, value);
+                PropertyUpdateArgs args = new PropertyUpdateArgs(info.target, info.propertyInfo, value,
+                    info.propertyPath);
                 setProperty(this, args);
             }
-
             // Has the transition completed?
             if (bCompleted == true)
             {
@@ -257,7 +274,30 @@ namespace Transitions
 
         #region Private functions
 
-		/// <summary>
+	    enum ControlType
+	    {
+            WinForms,
+            Wpf,
+            Unknown,
+	    }
+
+	    private ControlType GetControlType(object target)
+	    {
+	        var type = target.GetType();
+
+	        while (type.BaseType != null)
+	        {
+                if (type.FullName == "System.Windows.UIElement")
+                    return ControlType.Wpf;
+                else if (type.FullName == "System.ComponentModel")
+                    return ControlType.WinForms;
+	            //Debug.WriteLine(type.Name);
+	            type = type.BaseType;
+	        }
+	        return ControlType.Unknown;
+	    }
+
+	    /// <summary>
 		/// Sets a property on the object passed in to the value passed in. This method
 		/// invokes itself on the GUI thread if the property is being invoked on a GUI 
 		/// object.
@@ -274,47 +314,66 @@ namespace Transitions
                     return;
                 }
 
-                ISynchronizeInvoke invokeTarget = args.target as ISynchronizeInvoke;
-                if (invokeTarget != null && invokeTarget.InvokeRequired)
+                switch (GetControlType(args.target))
                 {
-                    // There is some history behind the next two lines, which is worth
-                    // going through to understand why they are the way they are.
+                    case ControlType.Wpf:
+                        (args.target as UIElement).Dispatcher.BeginInvoke(
+                            new Action<object, object>((target, value) =>
+                            {
+                                //args.propertyInfo.SetValue(target, value, null);
+                                ComplexProperty.SetComplexValue(target, args.propertyPath, args.value);
+                            }),
+                            args.target, args.value);
+                        break;
+                    case ControlType.WinForms:
+                        #region winforms
+                    ISynchronizeInvoke invokeTarget = args.target as ISynchronizeInvoke;
+                    if (invokeTarget != null && invokeTarget.InvokeRequired)
+                    {
+                        // There is some history behind the next two lines, which is worth
+                        // going through to understand why they are the way they are.
 
-                    // Initially we used BeginInvoke without the subsequent WaitOne for
-                    // the result. A transition could involve a large number of updates
-                    // to a property, and as this call was asynchronous it would send a 
-                    // large number of updates to the UI thread. These would queue up at
-                    // the GUI thread and mean that the UI could be some way behind where
-                    // the transition was.
+                        // Initially we used BeginInvoke without the subsequent WaitOne for
+                        // the result. A transition could involve a large number of updates
+                        // to a property, and as this call was asynchronous it would send a 
+                        // large number of updates to the UI thread. These would queue up at
+                        // the GUI thread and mean that the UI could be some way behind where
+                        // the transition was.
 
-                    // The line was then changed to the blocking Invoke call instead. This 
-                    // meant that the transition only proceded at the pace that the GUI 
-                    // could process it, and the UI was not overloaded with "old" updates.
+                        // The line was then changed to the blocking Invoke call instead. This 
+                        // meant that the transition only proceded at the pace that the GUI 
+                        // could process it, and the UI was not overloaded with "old" updates.
 
-                    // However, in some circumstances Invoke could block and lock up the
-                    // Transitions background thread. In particular, this can happen if the
-                    // control that we are trying to update is in the process of being 
-                    // disposed - for example, it is on a form that is being closed. See
-                    // here for details: 
-                    // http://social.msdn.microsoft.com/Forums/en-US/winforms/thread/7d2c941a-0016-431a-abba-67c5d5dac6a5
+                        // However, in some circumstances Invoke could block and lock up the
+                        // Transitions background thread. In particular, this can happen if the
+                        // control that we are trying to update is in the process of being 
+                        // disposed - for example, it is on a form that is being closed. See
+                        // here for details: 
+                        // http://social.msdn.microsoft.com/Forums/en-US/winforms/thread/7d2c941a-0016-431a-abba-67c5d5dac6a5
                     
-                    // To solve this, we use a combination of the two earlier approaches. 
-                    // We use BeginInvoke as this does not block and lock up, even if the
-                    // underlying object is being disposed. But we do want to wait to give
-                    // the UI a chance to process the update. So what we do is to do the
-                    // asynchronous BeginInvoke, but then wait (with a short timeout) for
-                    // it to complete.
-                    IAsyncResult asyncResult = invokeTarget.BeginInvoke(new EventHandler<PropertyUpdateArgs>(setProperty), new object[] { sender, args });
-                    asyncResult.AsyncWaitHandle.WaitOne(50);
-                }
-                else
-                {
-                    // We are on the correct thread, so we update the property...
-                    args.propertyInfo.SetValue(args.target, args.value, null);
+                        // To solve this, we use a combination of the two earlier approaches. 
+                        // We use BeginInvoke as this does not block and lock up, even if the
+                        // underlying object is being disposed. But we do want to wait to give
+                        // the UI a chance to process the update. So what we do is to do the
+                        // asynchronous BeginInvoke, but then wait (with a short timeout) for
+                        // it to complete.
+                        IAsyncResult asyncResult = invokeTarget.BeginInvoke(new EventHandler<PropertyUpdateArgs>(setProperty), new object[] { sender, args });
+                        asyncResult.AsyncWaitHandle.WaitOne(50);
+                    }
+                    else
+                    {
+                        // We are on the correct thread, so we update the property...
+                        args.propertyInfo.SetValue(args.target, args.value, null);
+                    }
+                    #endregion
+                        break;
+                    case ControlType.Unknown:
+                        break;
                 }
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                Debug.WriteLine(ex.ToString());                
                 // We silently catch any exceptions. These could be things like 
                 // bounds exceptions when setting properties.
             }
@@ -364,7 +423,7 @@ namespace Transitions
 
 		// A map of Type info to IManagedType objects. These are all the types that we
         // know how to perform transitions on...
-        private static IDictionary<Type, IManagedType> m_mapManagedTypes = new Dictionary<Type, IManagedType>();
+	    private static IDictionary<Type, IManagedType> m_mapManagedTypes = new Dictionary<Type, IManagedType>();
 
         #endregion
 
@@ -380,8 +439,12 @@ namespace Transitions
 			public object startValue;
 			public object endValue;
 			public object target;
+		    public string propertyPath;
+
 			public PropertyInfo propertyInfo;
 			public IManagedType managedType;
+
+		    public bool IsComplex;
 
             public TransitionedPropertyInfo copy()
             {
@@ -391,6 +454,8 @@ namespace Transitions
                 info.target = target;
                 info.propertyInfo = propertyInfo;
                 info.managedType = managedType;
+                info.propertyPath = propertyPath;
+                info.IsComplex = IsComplex;
                 return info;
             }
 		}
@@ -404,15 +469,19 @@ namespace Transitions
         // Event args used for the event we raise when updating a property...
 		private class PropertyUpdateArgs : EventArgs
 		{
-			public PropertyUpdateArgs(object t, PropertyInfo pi, object v)
+			public PropertyUpdateArgs(object t, PropertyInfo pi, object v, string propertyPath)
 			{
 				target = t;
 				propertyInfo = pi;
 				value = v;
+			    this.propertyPath = propertyPath;
+
 			}
+            
 			public object target;
 			public PropertyInfo propertyInfo;
 			public object value;
+		    public string propertyPath;
 		}
 
         // An object used to lock the list of transitioned properties, as it can be 
